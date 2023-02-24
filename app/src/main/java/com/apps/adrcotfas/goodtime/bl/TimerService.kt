@@ -12,40 +12,41 @@
  */
 package com.apps.adrcotfas.goodtime.bl
 
-import android.annotation.TargetApi
-import android.app.NotificationManager
-import android.content.Intent
-import android.media.AudioManager
-import android.net.wifi.WifiManager
-import android.os.Build
-import android.os.PowerManager
-import android.util.Log
-import androidx.annotation.RequiresApi
-import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.lifecycleScope
-import androidx.room.Transaction
 import com.apps.adrcotfas.goodtime.database.AppDatabase.Companion.getDatabase
-import com.apps.adrcotfas.goodtime.database.Session
-import com.apps.adrcotfas.goodtime.main.TimerActivity
+import dagger.hilt.android.AndroidEntryPoint
+import androidx.lifecycle.LifecycleService
+import javax.inject.Inject
 import com.apps.adrcotfas.goodtime.settings.PreferenceHelper
-import com.apps.adrcotfas.goodtime.util.Constants
-import com.apps.adrcotfas.goodtime.util.Constants.ClearNotificationEvent
+import org.greenrobot.eventbus.EventBus
+import kotlin.jvm.Synchronized
+import android.content.Intent
+import org.greenrobot.eventbus.Subscribe
+import com.apps.adrcotfas.goodtime.util.Constants.OneMinuteLeft
+import com.apps.adrcotfas.goodtime.util.Constants.FinishWorkEvent
 import com.apps.adrcotfas.goodtime.util.Constants.FinishBreakEvent
 import com.apps.adrcotfas.goodtime.util.Constants.FinishLongBreakEvent
-import com.apps.adrcotfas.goodtime.util.Constants.FinishWorkEvent
-import com.apps.adrcotfas.goodtime.util.Constants.OneMinuteLeft
-import com.apps.adrcotfas.goodtime.util.Constants.StartSessionEvent
 import com.apps.adrcotfas.goodtime.util.Constants.UpdateTimerProgressEvent
+import com.apps.adrcotfas.goodtime.util.Constants.ClearNotificationEvent
+import com.apps.adrcotfas.goodtime.util.Constants.StartSessionEvent
+import android.os.PowerManager
+import android.media.AudioManager
+import androidx.annotation.RequiresApi
+import android.os.Build
+import android.app.NotificationManager
+import android.net.wifi.WifiManager
+import com.apps.adrcotfas.goodtime.main.TimerActivity
+import android.annotation.TargetApi
+import android.util.Log
+import androidx.lifecycle.lifecycleScope
+import com.apps.adrcotfas.goodtime.database.Session
+import com.apps.adrcotfas.goodtime.util.Constants
 import com.apps.adrcotfas.goodtime.util.toFormattedTime
 import com.apps.adrcotfas.goodtime.util.toLocalTime
-import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import org.greenrobot.eventbus.EventBus
-import org.greenrobot.eventbus.Subscribe
+import java.lang.Exception
 import java.lang.Runnable
 import java.util.concurrent.TimeUnit
-import javax.inject.Inject
-import kotlin.math.log
+
 
 var x: Int = 1
 fun textcr(type: Int): String{
@@ -71,6 +72,8 @@ fun textcr(type: Int): String{
     }
     return ""
 }
+
+
 /**
  * Class representing the foreground service which triggers the countdown timer and handles events.
  */
@@ -224,7 +227,7 @@ class TimerService : LifecycleService() {
         if (sessionType === SessionType.LONG_BREAK) {
             preferenceHelper.resetCurrentStreak()
         }
-        stopForeground(true)
+        stopForeground()
         stopSelf()
         finalizeSession(sessionType, currentSessionManager.elapsedMinutesAtStop)
     }
@@ -254,7 +257,7 @@ class TimerService : LifecycleService() {
             }
         }
         ringtoneAndVibrationPlayer.play(sessionType, preferenceHelper.isRingtoneInsistent())
-        stopForeground(true)
+        stopForeground()
         updateLongBreakStreak(sessionType)
 
         // store what was done to the database
@@ -300,7 +303,7 @@ class TimerService : LifecycleService() {
             }
         }
         currentSessionManager.stopTimer()
-        stopForeground(true)
+        stopForeground()
         updateLongBreakStreak(sessionType)
         finalizeSession(sessionType, currentSessionManager.elapsedMinutesAtStop)
         onStartEvent(if (sessionType === SessionType.WORK) SessionType.BREAK else SessionType.WORK)
@@ -411,7 +414,8 @@ class TimerService : LifecycleService() {
         }
 
         val labelVal = currentSessionManager.currentSession.label.value
-        val labelValProper = if (labelVal == null || labelVal == "" || labelVal == "unlabeled") null else labelVal
+        val labelValProper =
+            if (labelVal == null || labelVal == "" || labelVal == "unlabeled") null else labelVal
 
         val endTime = System.currentTimeMillis()
         Log.d(TAG, "finalizeSession / elapsed minutes: $minutes")
@@ -437,6 +441,12 @@ class TimerService : LifecycleService() {
         }
     }
 
+    private fun stopForeground() {
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        else
+            stopForeground(true)
+    }
 
     private fun bringActivityToFront() {
         val activityIntent = Intent(this, TimerActivity::class.java)

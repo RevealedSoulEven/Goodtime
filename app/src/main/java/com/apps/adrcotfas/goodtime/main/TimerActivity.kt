@@ -20,14 +20,10 @@ import android.content.SharedPreferences.OnSharedPreferenceChangeListener
 import com.apps.adrcotfas.goodtime.statistics.main.SelectLabelDialog.OnLabelSelectedListener
 import javax.inject.Inject
 import com.apps.adrcotfas.goodtime.settings.PreferenceHelper
-import com.apps.adrcotfas.goodtime.bl.CurrentSessionManager
 import android.widget.TextView
 import com.google.android.material.chip.Chip
 import com.apps.adrcotfas.goodtime.statistics.SessionViewModel
-import com.apps.adrcotfas.goodtime.bl.SessionType
-import com.apps.adrcotfas.goodtime.bl.TimerState
 import android.content.Intent
-import com.apps.adrcotfas.goodtime.bl.TimerService
 import android.os.Build
 import android.os.Bundle
 import org.greenrobot.eventbus.EventBus
@@ -38,12 +34,12 @@ import android.view.animation.Animation
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.snackbar.BaseTransientBottomBar
 import android.annotation.SuppressLint
+import android.app.AlarmManager
+import android.content.ContextWrapper
 import com.apps.adrcotfas.goodtime.settings.SettingsActivity
-import com.apps.adrcotfas.goodtime.bl.NotificationHelper
 import android.content.SharedPreferences
 import android.graphics.PorterDuff
 import android.content.DialogInterface
-import com.apps.adrcotfas.goodtime.bl.CurrentSession
 import android.widget.Toast
 import android.widget.FrameLayout
 import org.greenrobot.eventbus.Subscribe
@@ -61,6 +57,7 @@ import android.view.*
 import android.view.animation.AnimationUtils
 import android.widget.ImageView
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.Toolbar
@@ -68,6 +65,7 @@ import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
 import com.apps.adrcotfas.goodtime.BuildConfig
+import com.apps.adrcotfas.goodtime.bl.*
 import com.apps.adrcotfas.goodtime.database.Label
 import com.apps.adrcotfas.goodtime.database.Session
 import com.apps.adrcotfas.goodtime.databinding.ActivityMainBinding
@@ -210,7 +208,7 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
                 messages[preferenceHelper.lastIntroStep],
                 Snackbar.LENGTH_INDEFINITE
             )
-                .setAction("OK") {
+                .setAction(getString(android.R.string.ok)) {
                     val nextStep = i + 1
                     preferenceHelper.lastIntroStep = nextStep
                     showTutorialSnackbars()
@@ -362,7 +360,7 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
         val batteryButton = menu.findItem(R.id.action_battery_optimization)
         batteryButton.isVisible = !isIgnoringBatteryOptimizations(this)
         labelButton = menu.findItem(R.id.action_current_label).also {
-            it.icon.setColorFilter(
+            it.icon?.setColorFilter(
                 ThemeHelper.getColor(this, ThemeHelper.COLOR_INDEX_ALL_LABELS),
                 PorterDuff.Mode.SRC_ATOP
             )
@@ -388,8 +386,10 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
                     .setTitle(R.string.action_reset_counter_title)
                     .setMessage(R.string.action_reset_counter)
                     .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                        sessionViewModel.deleteSessionsFinishedAfter(startOfTodayMillis() +
-                            preferenceHelper.getStartOfDayDeltaMillis())
+                        sessionViewModel.deleteSessionsFinishedAfter(
+                            startOfTodayMillis() +
+                                    preferenceHelper.getStartOfDayDeltaMillis()
+                        )
                         preferenceHelper.resetCurrentStreak()
                     }
                     .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int -> }
@@ -410,14 +410,14 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
 
     private fun setupEvents() {
         currentSession.duration.observe(
-            this,
-            { millis: Long -> updateTimeLabel(millis) })
-        currentSession.sessionType.observe(this, { sessionType: SessionType ->
+            this
+        ) { millis: Long -> updateTimeLabel(millis) }
+        currentSession.sessionType.observe(this) { sessionType: SessionType ->
             currentSessionType = sessionType
             setupLabelView()
             setTimeLabelColor()
-        })
-        currentSession.timerState.observe(this, { timerState: TimerState ->
+        }
+        currentSession.timerState.observe(this) { timerState: TimerState ->
             when {
                 timerState === TimerState.INACTIVE -> {
                     setupLabelView()
@@ -442,7 +442,7 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
                     }
                 }
             }
-        })
+        }
     }
 
     private val currentSession: CurrentSession
@@ -484,12 +484,12 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
             sessionViewModel.getAllSessionsUnarchived(
                 startOfTodayMillis() + startOfDayDeltaMillis,
                 startOfTomorrowMillis() + startOfDayDeltaMillis
-            ).observe(this, { sessions: List<Session> ->
+            ).observe(this) { sessions: List<Session> ->
                 if (sessionsCounterText != null) {
                     sessionsCounterText!!.text = sessions.count().toString()
                 }
                 alertMenuItem.isVisible = true
-            })
+            }
         }
         return super.onPrepareOptionsMenu(menu)
     }
@@ -552,14 +552,54 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
                 .toString() + ":"
                     + if (seconds > 9) seconds else "0$seconds")
         }
-        timeView!!.text = currentFormattedTick
+        timeView.text = currentFormattedTick
         Log.v(TAG, "drawing the time label.")
         if (preferenceHelper.isScreensaverEnabled() && seconds == 1L && currentSession.timerState.value !== TimerState.PAUSED) {
             teleportTimeView()
         }
     }
 
+    private fun scheduleAlarmPermissionGranted(): Boolean {
+        val alarmManager: AlarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        return if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+            && !alarmManager.canScheduleExactAlarms()
+        ) {
+            showAlarmPermissionSnackbar()
+            false
+        } else {
+            true
+        }
+    }
+
+    private fun showAlarmPermissionSnackbar() {
+        val s = Snackbar.make(
+            toolbar,
+            getString(R.string.settings_grant_permission),
+            Snackbar.LENGTH_INDEFINITE
+        )
+            .setAction(getString(android.R.string.ok)) {
+                askForAlarmPermission(this)
+            }
+            .setAnchorView(toolbar)
+        s.behavior = object : BaseTransientBottomBar.Behavior() {
+            override fun canSwipeDismissView(child: View): Boolean {
+                return false
+            }
+        }
+        s.show()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    fun askForAlarmPermission(contextWrapper: ContextWrapper) {
+        val intent = Intent().apply {
+            action = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+        }
+        contextWrapper.startActivity(intent)
+    }
+
     private fun start(sessionType: SessionType) {
+        if (!scheduleAlarmPermissionGranted()) return
         var startIntent = Intent()
         when (currentSession.timerState.value) {
             TimerState.INACTIVE -> startIntent = IntentWithAction(
@@ -588,8 +628,8 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
         } else {
             startService(stopIntent)
         }
-        whiteCover!!.visibility = View.GONE
-        whiteCover!!.clearAnimation()
+        whiteCover.visibility = View.GONE
+        whiteCover.clearAnimation()
     }
 
     private fun add60Seconds() {
@@ -688,23 +728,23 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
     private fun setupLabelView() {
         val label = preferenceHelper.currentSessionLabel
         if (isInvalidLabel(label)) {
-            labelChip!!.visibility = View.GONE
-            labelButton!!.isVisible = true
+            labelChip.visibility = View.GONE
+            labelButton.isVisible = true
             val color = ThemeHelper.getColor(this, ThemeHelper.COLOR_INDEX_ALL_LABELS)
-            labelButton!!.icon.setColorFilter(
+            labelButton.icon?.setColorFilter(
                 color, PorterDuff.Mode.SRC_ATOP
             )
         } else {
             val color = ThemeHelper.getColor(this, label.colorId)
             if (preferenceHelper.showCurrentLabel()) {
-                labelButton!!.isVisible = false
-                labelChip!!.visibility = View.VISIBLE
-                labelChip!!.text = label.title
-                labelChip!!.chipBackgroundColor = ColorStateList.valueOf(color)
+                labelButton.isVisible = false
+                labelChip.visibility = View.VISIBLE
+                labelChip.text = label.title
+                labelChip.chipBackgroundColor = ColorStateList.valueOf(color)
             } else {
-                labelChip!!.visibility = View.GONE
-                labelButton!!.isVisible = true
-                labelButton!!.icon.setColorFilter(
+                labelChip.visibility = View.GONE
+                labelButton.isVisible = true
+                labelButton.icon?.setColorFilter(
                     color, PorterDuff.Mode.SRC_ATOP
                 )
             }
@@ -717,21 +757,19 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
 
     private fun setTimeLabelColor() {
         val label = preferenceHelper.currentSessionLabel
-        if (timeView != null) {
-            if (currentSessionType === SessionType.BREAK || currentSessionType === SessionType.LONG_BREAK) {
-                timeView!!.setTextColor(ThemeHelper.getColor(this, ThemeHelper.COLOR_INDEX_BREAK))
-                return
-            }
-            if (!isInvalidLabel(label)) {
-                timeView!!.setTextColor(ThemeHelper.getColor(this, label.colorId))
-            } else {
-                timeView!!.setTextColor(
-                    ThemeHelper.getColor(
-                        this,
-                        ThemeHelper.COLOR_INDEX_UNLABELED
-                    )
+        if (currentSessionType === SessionType.BREAK || currentSessionType === SessionType.LONG_BREAK) {
+            timeView.setTextColor(ThemeHelper.getColor(this, ThemeHelper.COLOR_INDEX_BREAK))
+            return
+        }
+        if (!isInvalidLabel(label)) {
+            timeView.setTextColor(ThemeHelper.getColor(this, label.colorId))
+        } else {
+            timeView.setTextColor(
+                ThemeHelper.getColor(
+                    this,
+                    ThemeHelper.COLOR_INDEX_UNLABELED
                 )
-            }
+            )
         }
     }
 
@@ -768,8 +806,8 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
     }
 
     private fun startFlashingNotification() {
-        whiteCover!!.visibility = View.VISIBLE
-        whiteCover!!.startAnimation(
+        whiteCover.visibility = View.VISIBLE
+        whiteCover.startAnimation(
             AnimationUtils.loadAnimation(
                 applicationContext, R.anim.blink_screen
             )
@@ -777,7 +815,7 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
     }
 
     private fun startFlashingNotificationShort() {
-        whiteCover!!.visibility = View.VISIBLE
+        whiteCover.visibility = View.VISIBLE
         val anim = AnimationUtils.loadAnimation(applicationContext, R.anim.blink_screen_3_times)
         anim.setAnimationListener(object : Animation.AnimationListener {
             override fun onAnimationStart(animation: Animation) {}
@@ -787,11 +825,11 @@ class TimerActivity : ActivityWithBilling(), OnSharedPreferenceChangeListener,
 
             override fun onAnimationRepeat(animation: Animation) {}
         })
-        whiteCover!!.startAnimation(anim)
+        whiteCover.startAnimation(anim)
     }
 
     private fun stopFlashingNotification() {
-        whiteCover!!.visibility = View.GONE
+        whiteCover.visibility = View.GONE
         whiteCover.clearAnimation()
         mainViewModel.enableFlashingNotification = false
     }
