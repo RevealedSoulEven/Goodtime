@@ -51,13 +51,7 @@
             android:summary="%s"
             android:title="@string/pref_timer_style"
             app:iconSpaceReserved="false"/>
-
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="forward_timer"
-            android:title="@string/forward_timer"
-            app:iconSpaceReserved="false"/>
-
+        
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="pref_fullscreen"
